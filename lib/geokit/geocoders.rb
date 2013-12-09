@@ -867,7 +867,12 @@ module Geokit
       # 98% of your geocoding calls will be successful with the first call  
       def self.do_geocode(address, options = {})
         geocode_ip = /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.match(address)
-        provider_order = geocode_ip ? Geokit::Geocoders::ip_provider_order : Geokit::Geocoders::provider_order
+
+        unless options[:provider_order].nil?
+          provider_order = options.delete :provider_order
+        else
+          provider_order = geocode_ip ? Geokit::Geocoders::ip_provider_order : Geokit::Geocoders::provider_order
+        end
         
         provider_order.each do |provider|
           begin
