@@ -45,9 +45,7 @@ module Geokit
     end
     
     def url_escape(s)
-    s.gsub(/([^ a-zA-Z0-9_.-]+)/nu) do
-      '%' + $1.unpack('H2' * $1.size).join('%').upcase
-      end.tr(' ', '+')
+      URI.escape(s)
     end
     
     def camelize(str)
@@ -599,7 +597,7 @@ module Geokit
         res = res = self.call_geocoder_service(self.geocode_url(address,options))
         return GeoLoc.new if !res.is_a?(Net::HTTPSuccess)
         json = res.body
-        logger.debug "Google geocoding. Address: #{address}. Result: #{json}"
+#         logger.debug "Google geocoding. Address: #{address}. Result: #{json}"
         return self.json2GeoLoc(json, address)        
       end
  
@@ -627,6 +625,40 @@ module Geokit
         end
       end
 
+      # location_type stores additional data about the specified location.
+      # The following values are currently supported:
+      # "ROOFTOP" indicates that the returned result is a precise geocode
+      # for which we have location information accurate down to street
+      # address precision.
+      # "RANGE_INTERPOLATED" indicates that the returned result reflects an
+      # approximation (usually on a road) interpolated between two precise
+      # points (such as intersections). Interpolated results are generally
+      # returned when rooftop geocodes are unavailable for a street address.
+      # "GEOMETRIC_CENTER" indicates that the returned result is the
+      # geometric center of a result such as a polyline (for example, a
+      # street) or polygon (region).
+      # "APPROXIMATE" indicates that the returned result is approximate
+
+      # these do not map well. Perhaps we should guess better based on size
+      # of bounding box where it exists? Does it really matter?
+      def self.accuracy
+        {
+          "ROOFTOP" => 9,
+          "RANGE_INTERPOLATED" => 8,
+          "GEOMETRIC_CENTER" => 5,
+          "APPROXIMATE" => 4
+        }
+      end
+
+      # Grouped by accuracy, then sorts the groups by accuracy, and 
+      # joins the results. This means that if google returns 5 results,
+      # and of those 5, 3 of them are the same accuracy, we will maintain
+      # the order of those three as we've received them, within our sorted
+      # results that are returned.
+      def self.grouped_and_sorted_by_accuracy(results)
+        results.group_by{|a| accuracy[ a['geometry']['location_type'] ]}.sort_by {|accuracy,x| accuracy }.reverse.map {|x,locations| locations}.flatten
+      end
+
       def self.json2GeoLoc(json, address="")
         ret=nil
         begin
@@ -646,29 +678,8 @@ module Geokit
         if !results['status'] == 'OK'
           raise Geokit::Geocoders::GeocodeError
         end
-        # location_type stores additional data about the specified location.
-        # The following values are currently supported:
-        # "ROOFTOP" indicates that the returned result is a precise geocode
-        # for which we have location information accurate down to street
-        # address precision.
-        # "RANGE_INTERPOLATED" indicates that the returned result reflects an
-        # approximation (usually on a road) interpolated between two precise
-        # points (such as intersections). Interpolated results are generally
-        # returned when rooftop geocodes are unavailable for a street address.
-        # "GEOMETRIC_CENTER" indicates that the returned result is the
-        # geometric center of a result such as a polyline (for example, a
-        # street) or polygon (region).
-        # "APPROXIMATE" indicates that the returned result is approximate
 
-        # these do not map well. Perhaps we should guess better based on size
-        # of bounding box where it exists? Does it really matter?
-        accuracy = {
-          "ROOFTOP" => 9,
-          "RANGE_INTERPOLATED" => 8,
-          "GEOMETRIC_CENTER" => 5,
-          "APPROXIMATE" => 4
-        }
-        results['results'].sort_by{|a|accuracy[a['geometry']['location_type']]}.reverse.each do |addr|
+        grouped_and_sorted_by_accuracy(results['results']).each do |addr|
           res=GeoLoc.new
           res.provider = 'google3'
           res.success = true
@@ -703,7 +714,7 @@ module Geokit
             res.precision = 'street'
             res.accuracy = 7
           end
-            
+
           res.lat=addr['geometry']['location']['lat'].to_f
           res.lng=addr['geometry']['location']['lng'].to_f
 
@@ -856,7 +867,12 @@ module Geokit
       # 98% of your geocoding calls will be successful with the first call  
       def self.do_geocode(address, options = {})
         geocode_ip = /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.match(address)
-        provider_order = geocode_ip ? Geokit::Geocoders::ip_provider_order : Geokit::Geocoders::provider_order
+
+        unless options[:provider_order].nil?
+          provider_order = options.delete :provider_order
+        else
+          provider_order = geocode_ip ? Geokit::Geocoders::ip_provider_order : Geokit::Geocoders::provider_order
+        end
         
         provider_order.each do |provider|
           begin
